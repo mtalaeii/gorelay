@@ -1,0 +1,83 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.goos }}/${{ matrix.goarch }}${{ matrix.goarm && format('v{0}', matrix.goarm) || '' }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64 }
+          - { goos: linux,   goarch: arm64 }
+          - { goos: linux,   goarch: arm,   goarm: "6" }
+          - { goos: linux,   goarch: arm,   goarm: "7" }
+          - { goos: linux,   goarch: "386" }
+          - { goos: darwin,  goarch: amd64 }
+          - { goos: darwin,  goarch: arm64 }
+          - { goos: windows, goarch: amd64, ext: ".exe" }
+          - { goos: windows, goarch: arm64, ext: ".exe" }
+          - { goos: windows, goarch: "386", ext: ".exe" }
+          - { goos: freebsd, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          CGO_ENABLED: "0"
+          EXT: ${{ matrix.ext }}
+        run: |
+          set -eu
+          suffix=""
+          [ -n "${GOARM:-}" ] && suffix="v${GOARM}"
+          name="gorelay-${GOOS}-${GOARCH}${suffix}${EXT}"
+          go build -trimpath -ldflags="-s -w" -o "$name" ./cmd/gorelay
+          echo "ASSET=$name" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET }}
+          path: ${{ env.ASSET }}
+          retention-days: 1
+          if-no-files-found: error
+
+  release:
+    name: release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum * > checksums.txt
+
+      - name: Publish release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/* \
+            --title  "gorelay $TAG" \
+            --generate-notes

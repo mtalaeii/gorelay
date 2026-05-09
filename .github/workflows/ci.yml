@@ -1,0 +1,33 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    name: build (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - { name: linux,   runner: ubuntu-latest  }
+          - { name: macos,   runner: macos-latest   }
+          - { name: windows, runner: windows-latest }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build -trimpath -ldflags="-s -w" ./cmd/gorelay
+
+      - name: Test
+        run: go test ./...
