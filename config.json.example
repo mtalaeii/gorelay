@@ -1,14 +1,14 @@
 {
-  "http_port": 8080,
-  "socks5_port": 1080,
+  "http": "0.0.0.0:8080",
+  "socks": "",
   "google_ip": "216.239.38.120",
   "front_domain": "www.google.com",
-  "script_ids": [],
-  "auth_key": "",
+  "script_ids": ["PASTE_DEPLOYMENT_ID_HERE"],
+  "auth_key": "CHANGE_ME",
   "log_level": "info",
-  "h2_connections_count": 1,
+  "h2_conns": 1,
   "worker_url": "",
-  "tcp_tunnels_host": "",
-  "http_tunnels_host": "",
+  "tcp_tunnel_hosts": "",
+  "http_tunnel_hosts": "",
   "bypass_ss": false
 }
