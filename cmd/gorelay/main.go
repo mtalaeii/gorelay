@@ -86,12 +86,12 @@ func parseFlags() *Config {
 	cfg := &Config{}
 	data, err := os.ReadFile("./config.json")
 	if err != nil {
-		slog.Error("Error reading file: %v\n", "err", err)
+		slog.Error("Error reading file: %v", "err", err)
 		os.Exit(1)
 	}
 	err = json.Unmarshal(data, &cfg)
 	if err != nil {
-		slog.Error("Error parsing JSON: %v\n", "err", err)
+		slog.Error("Error parsing JSON: %v", "err", err)
 		os.Exit(1)
 	}
 	return cfg
