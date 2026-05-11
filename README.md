@@ -79,10 +79,7 @@ Apps Script can't carry, an optional Cloudflare Worker fills in.
 For multi-script load balancing: repeat the deployment under a
 different Google account (one per account is the cleanest split,
 since Apps Script quota is per-account), get each Deployment ID,
-and pass them all:
-
-```
---script-id ID_1 --script-id ID_2 --script-id ID_3
+and pass them all to script_ids inside `config.json`
 ```
 
 `auth_key` must be the same value in every deployment.
