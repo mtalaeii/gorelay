@@ -7,12 +7,42 @@
 > this myself.
 
 ## Why this exists
+
 I hate Python.
 
 ## How it works
-Run gorelay, point your devices at it as an HTTP or SOCKS5 proxy.  
-Every outbound connection gets disguised as TLS to `www.google.com` on a Google CDN IP — that's all the censor sees. Inside the disguise, gorelay routes per-host through one of the paths below; for things Apps Script can't carry, an optional Cloudflare Worker fills in.
 
+Run gorelay, Point your devices at it as an HTTP or SOCKS5 proxy.
+Every outbound connection gets disguised as TLS to `www.google.com`
+on a Google CDN IP — that's all the censor sees. Inside the disguise,
+gorelay routes per-host through one of the paths below; for things
+Apps Script can't carry, an optional Cloudflare Worker fills in.
+
+```
+[device]  ──HTTP/SOCKS──▶  [gorelay]  ──fronted-TLS──▶   [DST = 216.239.38.120]
+                                                         [SNI = www.google.com]
+
+        │
+        ├── direct       ──▶ Google services already allowed (gstatic, accounts, …)
+        ├── sni-rewrite  ──▶ Google-frontended but DPI-blocked (YouTube, ytimg, …)
+        ├── relay        ──▶ Apps Script ──▶ open internet (default)
+        │
+        ├── http-tunnel  ──▶ Apps Script ──▶ CF Worker ──▶ HTTP destination (sites that block Google IPs)
+        ├── tcp-tunnel   ──▶ Apps Script ──▶ CF Worker ──▶ raw TCP destination (cert-pinned apps, Telegram MTProto, …)
+        │
+        └── direct-ip    ──▶ plain TCP to that IP (no MITM)
+```
+
+## Features
+
+- Multi-script load balancing
+- Cloudflare Worker as HTTP exit node
+- Cloudflare Worker as TCP-over-HTTP tunnel
+- SafeSearch bypass
+- HTTP + SOCKS5 listeners
+- CA-free path for tcp-tunnel hosts
+- Cert-pinned app support (Apple Music, banks, …)
+```
 [device] ──HTTP/SOCKS──▶ [gorelay] ──fronted-TLS──▶ [DST = 216.239.38.120]
 [SNI = www.google.com]
 │
@@ -24,36 +54,110 @@ Every outbound connection gets disguised as TLS to `www.google.com` on a Google 
 ├── tcp-tunnel ──▶ Apps Script ──▶ CF Worker ──▶ raw TCP destination
 │
 └── direct-ip ──▶ plain TCP to that IP (no MITM)
-
-
-## Features
-- Multi-script load balancing
-- Cloudflare Worker as HTTP exit node
-- Cloudflare Worker as TCP-over-HTTP tunnel
-- SafeSearch bypass
-- HTTP + SOCKS5 listeners
-- CA-free path for tcp-tunnel hosts
-- Cert-pinned app support
-
-## Configuration
-
-gorelay now supports **`config.json`** (recommended) in addition to command-line flags.  
-**Flags will override** values from the config file.
-
-### Example `config.json`
-```json
-{
-  "http_port": 8080,
-  "socks5_port": 1080,
-  "google_ip": "216.239.38.120",
-  "front_domain": "www.google.com",
-  "script_ids": ["SCRIPT_ID_1", "SCRIPT_ID_2"],
-  "auth_key": "your_long_random_secret_here",
-  "log_level": "info",
-  "h2_connections_count": 3,
-  "worker_url": "https://your-worker.workers.dev",
-  "http_tunnels_host": "chatgpt.com,openai.com",
-  "tcp_tunnels_host": "apple.com,icloud.com,149.154.167.0/24",
-  "bypass_ss": true
-}
 ```
+
+## Risks and cautions
+
+- Google killed classic domain-fronting around 2018; this project relies on a narrower loophole that google may not like.
+- Apps Script free tier is **20,000 `UrlFetch` calls/day per Gmail account** — heavy abuse can get your account's Apps Script access yanked.
+- `bypass_ss` routes around a policy Google enforces on purpose; my own testing was fine, yours might not be — use with care.
+- `tcp_tunnels_host` is the most quota-hungry path; don't dump Telegram in there casually, prefer `http_tunnels_host` for anything that's actually HTTP.
+- Cloudflare Worker free tier is 100k req/day (~5× Apps Script's); still finite, TCP-tunnel polls eat it fast.
+
+## Setup
+
+### 1. Apps Script (required)
+
+1. Open <https://script.google.com> → **New project**.
+2. Paste in `deploy/apps-script/code.gs` from this repo.
+3. Set the `auth_key` constant to a long random secret.
+4. **Deploy → New deployment → Web app**:
+   - Execute as: **Me**
+   - Who has access: **Anyone**
+5. Copy the Deployment ID. That's one of your `script_ids`.
+
+For multi-script load balancing: repeat the deployment under a
+different Google account (one per account is the cleanest split,
+since Apps Script quota is per-account), get each Deployment ID,
+and pass them all:
+
+```
+--script-id ID_1 --script-id ID_2 --script-id ID_3
+```
+
+`auth_key` must be the same value in every deployment.
+
+### 2. Cloudflare Worker (optional)
+
+Skip this if you don't want `http_tunnels_host`,
+`tcp_tunnels_host`, or `bypass_ss`.
+
+```bash
+cd deploy/cloudflare-worker/
+# Edit worker.js — set PSK to the same value as your --auth-key
+npx wrangler@latest deploy
+```
+
+If `wrangler login`'s OAuth flow gets bot-challenged by Cloudflare
+itself (yes, it can happen), use an API token:
+
+```bash
+# Cloudflare dashboard → Profile → API Tokens → "Edit Cloudflare Workers" template
+export CLOUDFLARE_API_TOKEN="..."
+npx wrangler@latest deploy
+```
+
+Wrangler creates the Worker, registers the Durable Object, and prints
+the URL. That URL is your `worker_url`.
+
+### 3. Run gorelay
+
+you should just run :
+```bash
+./gorelay
+```
+
+everything automatically read and set from `config.json`
+
+### 4. Trust the CA
+
+On first run gorelay creates `./ca/ca.crt` in the working directory. You
+need to trust it on every device that uses the proxy. The proxy
+also serves it at `http://<server-ip>:8080/ca.crt` so phones can
+fetch it directly.
+
+| Platform | How |
+|---|---|
+| **macOS** | Double-click `ca.crt` → Keychain Access → find "gorelay" → expand Trust → set to **Always Trust** → drag from login keychain to System keychain. Restart browsers. |
+| **Windows** | Double-click `ca.crt` → Install Certificate → Local Machine → Trusted Root Certification Authorities. Then **fully** quit and reopen Chrome/Edge (no background processes left). |
+| **Linux** | `sudo cp ca/ca.crt /usr/local/share/ca-certificates/gorelay.crt && sudo update-ca-certificates` |
+| **iOS** | Open `http://<server-ip>:8080/ca.crt` in **Safari** → install the configuration profile from **Settings → General → VPN & Device Management** → then go to **Settings → General → About → Certificate Trust Settings** and **enable** the gorelay CA. iOS hides the user-CA trust by default; this last step is the one most people miss. |
+| **Android** | Open `http://<server-ip>:8080/ca.crt` → **Settings → Security → Encryption & credentials → Install a certificate → CA certificate**. Android 7+ requires apps to opt in to user CAs; browsers honor it, many in-app webviews don't. |
+| **Firefox** | Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import. (Firefox uses its own trust store, separate from the OS.) |
+
+## Troubleshooting
+
+| Symptom | What's happening |
+|---|---|
+| Cert errors on every site | CA isn't trusted yet, you should reinstall or troubleshout it |
+| Pinned mobile app refuses to connect (Apple Music, banks) | App-level cert pinning, OS trust store doesn't apply, you should forward them on tcp-over-http worker |
+| ChatGPT shows 403 / Cloudflare challenge | Destination blocks Google's IP range, you should forward them on http-forward worker |
+| YouTube auto-restricts adult content | Google enforces SafeSearch on its frontend, you can deploy cloudflare worker and bypass this |
+| Telegram won't connect on a strict-google.com network | MTProto is raw TCP, you should forward it on tcp-over-http worker |
+| `relay returned HTTP 403` on a specific host | Apps Script per-target rate limit, you should visit <https://script.google.com> for troubleshout |
+| Video chunks slow | Apps Script per-call latency caps relay throughput, Just live with it |
+| Apps Script quota exhausted | 20k/day limit hit, you should deploy a new one |
+
+## Building from source
+
+Pre-built binaries for common platforms are on the **releases** page —
+that's the recommended way to get gorelay. Build from source if your
+platform isn't covered, or if you want to modify the code.
+
+```bash
+git clone <repo>
+cd gorelay
+go build -ldflags='-s -w' -trimpath -o gorelay ./cmd/gorelay
+```
+
+Or just `make build`.
