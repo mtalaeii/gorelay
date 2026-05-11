@@ -1,0 +1,14 @@
+{
+  "http_port": 8080,
+  "socks5_port": 1080,
+  "google_ip": "216.239.38.120",
+  "front_domain": "www.google.com",
+  "script_ids": [],
+  "auth_key": "",
+  "log_level": "info",
+  "h2_connections_count": 1,
+  "worker_url": "",
+  "tcp_tunnels_host": "",
+  "http_tunnels_host": "",
+  "bypass_ss": false
+}

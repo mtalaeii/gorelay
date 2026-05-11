@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"flag"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,19 +12,19 @@ import (
 )
 
 type Config struct {
-	HTTPListen  string
-	SOCKSListen string
-	GoogleIP    string
-	FrontDomain string
-	ScriptIDs   []string
-	AuthKey     string
-	LogLevel    string
-	H2Conns     int
+	HTTPListen  string   `json:"http_port"`
+	SOCKSListen string   `json:"socks5_port"`
+	GoogleIP    string   `json:"google_ip"`
+	FrontDomain string   `json:"front_domain"`
+	ScriptIDs   []string `json:"script_ids"`
+	AuthKey     string   `json:"auth_key"`
+	LogLevel    string   `json:"log_level"`
+	H2Conns     int      `json:"h2_connections_count"`
 
-	WorkerURL       string
-	TCPTunnelHosts  string
-	HTTPTunnelHosts string
-	BypassSS        bool
+	WorkerURL       string `json:"worker_url"`
+	TCPTunnelHosts  string `json:"tcp_tunnels_host"`
+	HTTPTunnelHosts string `json:"http_tunnels_host"`
+	BypassSS        bool   `json:"bypass_ss"`
 }
 
 const caDir = "./ca"
@@ -84,32 +84,16 @@ func main() {
 
 func parseFlags() *Config {
 	cfg := &Config{}
-	flag.StringVar(&cfg.HTTPListen, "http", "0.0.0.0:8080", "listen address")
-	flag.StringVar(&cfg.SOCKSListen, "socks", "", "SOCKS listen address (e.g. 0.0.0.0:1080)")
-	flag.StringVar(&cfg.GoogleIP, "google-ip", "216.239.38.120", "Google frontend IP")
-	flag.StringVar(&cfg.FrontDomain, "front", "www.google.com", "TLS SNI")
-	flag.StringVar(&cfg.AuthKey, "auth-key", "", "shared secret (required)")
-	flag.StringVar(&cfg.LogLevel, "log", "info", "log level")
-	flag.IntVar(&cfg.H2Conns, "h2-conns", 1, "parallel H2 connections")
-	flag.StringVar(&cfg.WorkerURL, "worker-url", "", "Cloudflare Worker URL")
-	flag.StringVar(&cfg.TCPTunnelHosts, "tcp-tunnel-hosts", "", "TCP-tunneled hosts (IPs, CIDR, suffixes)")
-	flag.StringVar(&cfg.HTTPTunnelHosts, "http-tunnel-hosts", "", "HTTP-tunneled host suffixes")
-	flag.BoolVar(&cfg.BypassSS, "bypass-ss", false, "bypass Google SafeSearch")
-
-	flag.Func("script-id", "Apps Script Deployment ID, repeat for load balancing (required)",
-		func(v string) error {
-			v = strings.TrimSpace(v)
-			if v != "" {
-				cfg.ScriptIDs = append(cfg.ScriptIDs, v)
-			}
-			return nil
-		})
-
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "USAGE: %s --auth-key <secret> --script-id <id> [flags]\n", os.Args[0])
-		flag.PrintDefaults()
+	data, err := os.ReadFile("./config.json")
+	if err != nil {
+		slog.Error("Error reading file: %v\n", "err", err)
+		os.Exit(1)
 	}
-	flag.Parse()
+	err = json.Unmarshal(data, &cfg)
+	if err != nil {
+		slog.Error("Error parsing JSON: %v\n", "err", err)
+		os.Exit(1)
+	}
 	return cfg
 }
 
