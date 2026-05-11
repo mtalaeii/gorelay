@@ -166,13 +166,13 @@ func parseFlags() *Config {
 	if set["google-ip"] {
 		cfg.GoogleIP = googleIP
 	}
-	if set["front"] {
+	if set["front-domain"] {
 		cfg.FrontDomain = frontDomain
 	}
 	if set["auth-key"] {
 		cfg.AuthKey = authKey
 	}
-	if set["log"] {
+	if set["log-level"] {
 		cfg.LogLevel = logLevel
 	}
 	if set["h2-conns"] {
