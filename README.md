@@ -42,26 +42,13 @@ Apps Script can't carry, an optional Cloudflare Worker fills in.
 - HTTP + SOCKS5 listeners
 - CA-free path for tcp-tunnel hosts
 - Cert-pinned app support (Apple Music, banks, …)
-```
-[device] ──HTTP/SOCKS──▶ [gorelay] ──fronted-TLS──▶ [DST = 216.239.38.120]
-[SNI = www.google.com]
-│
-├── direct ──▶ Google services already allowed (gstatic, accounts, …)
-├── sni-rewrite ──▶ Google-frontended but DPI-blocked (YouTube, ytimg, …)
-├── relay ──▶ Apps Script ──▶ open internet (default)
-│
-├── http-tunnel ──▶ Apps Script ──▶ CF Worker ──▶ HTTP destination
-├── tcp-tunnel ──▶ Apps Script ──▶ CF Worker ──▶ raw TCP destination
-│
-└── direct-ip ──▶ plain TCP to that IP (no MITM)
-```
 
 ## Risks and cautions
 
 - Google killed classic domain-fronting around 2018; this project relies on a narrower loophole that google may not like.
 - Apps Script free tier is **20,000 `UrlFetch` calls/day per Gmail account** — heavy abuse can get your account's Apps Script access yanked.
-- `bypass_ss` routes around a policy Google enforces on purpose; my own testing was fine, yours might not be — use with care.
-- `tcp_tunnels_host` is the most quota-hungry path; don't dump Telegram in there casually, prefer `http_tunnels_host` for anything that's actually HTTP.
+- `--bypass-ss` routes around a policy Google enforces on purpose; my own testing was fine, yours might not be — use with care.
+- `--tcp-tunnel-hosts` is the most quota-hungry path; don't dump Telegram in there casually, prefer `--http-tunnel-hosts` for anything that's actually HTTP.
 - Cloudflare Worker free tier is 100k req/day (~5× Apps Script's); still finite, TCP-tunnel polls eat it fast.
 
 ## Setup
@@ -70,28 +57,34 @@ Apps Script can't carry, an optional Cloudflare Worker fills in.
 
 1. Open <https://script.google.com> → **New project**.
 2. Paste in `deploy/apps-script/code.gs` from this repo.
-3. Set the `auth_key` constant to a long random secret.
+3. Set the `AUTH_KEY` constant to a long random secret.
 4. **Deploy → New deployment → Web app**:
    - Execute as: **Me**
    - Who has access: **Anyone**
-5. Copy the Deployment ID. That's one of your `script_ids`.
+5. Copy the Deployment ID. That's your `--script-id` (or an entry in `script_ids`).
 
 For multi-script load balancing: repeat the deployment under a
 different Google account (one per account is the cleanest split,
 since Apps Script quota is per-account), get each Deployment ID,
-and pass them all to script_ids inside `config.json`
+and pass them all — either as repeated flags:
+
+```
+--script-id ID_1 --script-id ID_2 --script-id ID_3
 ```
 
-`auth_key` must be the same value in every deployment.
+…or as a `script_ids` array in `config.json`.
+
+`AUTH_KEY` must be the same value in every deployment.
 
 ### 2. Cloudflare Worker (optional)
 
-Skip this if you don't want `http_tunnels_host`,
-`tcp_tunnels_host`, or `bypass_ss`.
+Skip this if you don't want `--http-tunnel-hosts`,
+`--tcp-tunnel-hosts`, or `--bypass-ss`.
 
 ```bash
 cd deploy/cloudflare-worker/
-# Edit worker.js — set PSK to the same value as your --auth-key
+# Edit worker.js — set PSK to the same value as your auth-key
+# (the --auth-key flag or the auth_key entry in config.json)
 npx wrangler@latest deploy
 ```
 
@@ -105,16 +98,70 @@ npx wrangler@latest deploy
 ```
 
 Wrangler creates the Worker, registers the Durable Object, and prints
-the URL. That URL is your `worker_url`.
+the URL. That URL is your `--worker-url` (or `worker_url` in config).
 
 ### 3. Run gorelay
 
-you should just run :
+gorelay reads its config from three sources, merged in this order
+(each one overrides the previous):
+
+1. **Built-in defaults.**
+2. **A JSON config file.** Path is `--config <file>`, default `./config.json`.
+   The default path is optional — if `config.json` isn't there, gorelay
+   just skips it. If you pass `--config` explicitly, the file must exist
+   and parse cleanly or startup fails.
+3. **Command-line flags.** Only flags you actually pass override config;
+   leaving a flag off does *not* reset the config value to its default.
+
+`--auth-key` and at least one `--script-id` must end up set from *some*
+source — neither has to come from flags specifically. Putting both in
+`config.json` and running bare `./gorelay` works.
+
+A template lives at `config.json.example`; copy it, edit the placeholders,
+and you're set:
+
 ```bash
+cp config.json.example config.json
 ./gorelay
 ```
 
-everything automatically read and set from `config.json`
+Bare-minimum, all-flags:
+
+```bash
+./gorelay --auth-key SECRET --script-id ID
+```
+
+Multi-script:
+
+```bash
+./gorelay --auth-key SECRET \
+          --script-id ID_1 --script-id ID_2 --script-id ID_3
+```
+
+Worker for ChatGPT-style sites + SafeSearch bypass:
+
+```bash
+./gorelay --auth-key SECRET --script-id ID \
+          --worker-url https://gorelay-worker.<sub>.workers.dev \
+          --bypass-ss \
+          --http-tunnel-hosts chatgpt.com
+```
+
+Everything (with SOCKS5 listener and parallel H2 connections):
+
+```bash
+./gorelay --auth-key SECRET \
+          --script-id ID_1 --script-id ID_2 \
+          --worker-url https://gorelay-worker.<sub>.workers.dev \
+          --bypass-ss \
+          --http-tunnel-hosts chatgpt.com \
+          --tcp-tunnel-hosts apple.com,icloud.com,149.154.167.0/24 \
+          --socks 0.0.0.0:1080 \
+          --h2-conns 3
+```
+
+Mixing also works — e.g. keep long host lists in `config.json` and
+override just `--auth-key` from a secret manager at startup.
 
 ### 4. Trust the CA
 
@@ -131,6 +178,30 @@ fetch it directly.
 | **iOS** | Open `http://<server-ip>:8080/ca.crt` in **Safari** → install the configuration profile from **Settings → General → VPN & Device Management** → then go to **Settings → General → About → Certificate Trust Settings** and **enable** the gorelay CA. iOS hides the user-CA trust by default; this last step is the one most people miss. |
 | **Android** | Open `http://<server-ip>:8080/ca.crt` → **Settings → Security → Encryption & credentials → Install a certificate → CA certificate**. Android 7+ requires apps to opt in to user CAs; browsers honor it, many in-app webviews don't. |
 | **Firefox** | Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import. (Firefox uses its own trust store, separate from the OS.) |
+
+## Flag reference
+
+Every flag can also be set via the corresponding JSON key in the
+config file. Flags win when both are present.
+
+| Flag | Config key | Default | Notes |
+|---|---|---|---|
+| `--config` | — | `config.json` | JSON config path; the default path is optional, but an explicitly passed path must exist and parse |
+| `--auth-key` | `auth_key` | — | shared secret across `code.gs` AUTH_KEY, `worker.js` PSK, and gorelay |
+| `--script-id` | `script_ids` | — | Apps Script Deployment ID — repeat the flag, or use an array in config |
+| `--http` | `http` | `0.0.0.0:8080` | HTTP CONNECT listen address |
+| `--socks` | `socks` | *(off)* | SOCKS5 listen address; e.g. `0.0.0.0:1080` to enable |
+| `--google-ip` | `google_ip` | `216.239.38.120` | Google frontend IP to dial |
+| `--front-domain` | `front_domain` | `www.google.com` | TLS SNI to present |
+| `--log-level` | `log_level` | `info` | `debug` / `info` / `warn` / `error` |
+| `--h2-conns` | `h2_conns` | `1` | parallel HTTP/2 connections to Apps Script |
+| `--worker-url` | `worker_url` | — | Cloudflare Worker URL (unlocks the next three) |
+| `--http-tunnel-hosts` | `http_tunnel_hosts` | — | comma-separated host suffixes routed through Worker (HTTP) |
+| `--tcp-tunnel-hosts` | `tcp_tunnel_hosts` | — | comma-separated IPs / CIDR / suffixes routed through Worker (raw TCP) |
+| `--bypass-ss` | `bypass_ss` | off | bypass YouTube SafeSearch |
+
+`--auth-key` and at least one `--script-id` are required, but either
+can be supplied entirely from the config file.
 
 ## Troubleshooting
 
